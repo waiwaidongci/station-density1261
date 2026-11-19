@@ -11,7 +11,7 @@
 1. 业务总览：批次、样本、任务与批准交付账册。
 2. 巡测专题：创建/修改来源说明、查看样本、用真实业务字段追加记录；列表分页。
 3. 分析配置：冻结来源、参数和全部样本，进入Redis队列。
-4. 完整结果：真实算法摘要、专属诊断、全部CSV导出和可恢复失败态。
+4. 完整结果：真实算法摘要、专属诊断、全部CSV导出和可恢复失败态；含复访前逐站剔除影响试算与噪声翻转排名。
 5. 复访计划：分析师草案→负责人批准→阅读者下载批准快照。
 6. 审计：登录、来源修改、任务worker完成、业务说明批准等事件。
 
@@ -66,6 +66,15 @@ Survey / StationReading / DensityRun / VisitPlan 是核心实体；另有User和
 
 每个特征先标准化，再按密度连通分区；噪声标签表示稀疏样本，不等同污染或地理热点显著性。
 
+### 复访前逐站剔除（LOO）影响试算
+
+在已完成、已冻结的研究上，逐站剔除一座微站，用剩余样本**重新标准化**（均值/尺度解析更新，等价重新 fit StandardScaler），eps/min_samples 照旧，统计**其他站**噪声身份相对基线的翻转数并降序排名，回答“少测哪座微站最容易改变噪声判定”。剔除后剩余样本出现常量列的试算判为**尺度退化，单列不参评**。实现位于 `backend/src/services/loo_engine.py` 与 `loo.py`：
+
+- 额外内存预算默认 128MB（`LOO_MEMORY_LIMIT`），引擎内大块数组全部登记计数，距离分块流式计算，**不物化 n×n 全站距离矩阵**；watch 邻域边落盘为 memmap。
+- **不逐站重跑聚类**：基线邻域图与 DBSCAN 标签只构建一次，每站仅做图增量判定（删顶点、watch 边重判、核心状态更新、噪声可达性）。
+- 五千站按批试算（`LOO_BATCH_SIZE`，1–5000，默认256），每批原子落盘带校验和；中断恢复只沿用完好批次，坏批回撤贡献后重试、不重复计入。
+- 全部批次齐全且通过基线等价、覆盖完整性、翻转有界性校验后才发布排名；研究页面（完整结果）展示进度、前15名与退化单列，ZIP 含完整排名 CSV、退化清单与口径元数据。
+
 失败态：业务字段缺失/非有限数值、参数越界、样本不足、退化特征或结构错误均明确拒绝或将任务标failed，错误消息保存在任务中。可回到来源或配置修正后重新执行，历史失败记录保留。
 
 已知边界：只在温度/湿度/颗粒三个标准化特征上做密度分区；不是地理显著性、风险诊断或自动污染识别。eps敏感，分区编号没有大小顺序；含常量列明确拒绝。
@@ -101,8 +110,10 @@ backend/migrations/001_initial.sql
 | SEED_DEMO | `true` |
 | JWT_SECRET | `.env.example`演示值，部署前修改 |
 | DATABASE_URL / REDIS_URL | Compose内部连接，定义在compose的env锚点 |
-| ARTIFACT_DIR | `/artifacts`，后端worker共享 |
+| ARTIFACT_DIR | `/artifacts`，后端worker共享；LOO 批次/watch 文件位于其下 `loo/<job_id>/` |
+| LOO_MEMORY_LIMIT | 逐站剔除引擎额外内存预算（字节），默认 `134217728`（128MB） |
+| LOO_BATCH_SIZE | 每批试算站数，1–5000，默认 `256` |
 
 共享枚举：`backend/src/constants/enums.py` 与 `frontend/src/constants/enums.js` 都定义 admin/analyst/viewer、queued/running/completed/failed、draft/approved。后端service检查对应字符串；README为全量值说明。共享前端组件table/status/chart/business跨总览、结果、配置与复核复用；actions hook和format utils负责交互/格式。后端errors与rate_limit是两个中间件。
 
-测试及截图在批根 `test-artifacts/gb-0042/`，不混入源码。独立算法oracle、HTTP完整流程和真实Playwright浏览器流程见该目录 `TESTING.md`。License：MIT。
+测试及截图在批根 `test-artifacts/gb-0042/`，不混入源码。独立算法oracle、HTTP完整流程和真实Playwright浏览器流程见该目录 `TESTING.md`；逐站剔除试算的 oracle 对照、5000站规模/内存守卫与中断恢复测试见 `test-artifacts/gb-0042/loo/TESTING.md`。License：MIT。

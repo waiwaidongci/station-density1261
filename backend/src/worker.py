@@ -1,13 +1,13 @@
 import json,time,logging
 from redis import Redis
-from sqlalchemy import select
 from .config.database import Session
-from .config.settings import REDIS_URL,ARTIFACT_DIR
+from .config.settings import REDIS_URL,ARTIFACT_DIR,ANALYSIS_QUEUE,LOO_QUEUE
 from .models.run import Run
-from .models import source,record,user,note,audit
+from .models import source,record,user,note,audit,loo
 from .services.algorithm import calculate
 from .services.audit import log
 from .services.export import csv_response
+from .services.loo import execute_job
 queue=Redis.from_url(REDIS_URL)
 ARTIFACT_DIR.mkdir(parents=True,exist_ok=True)
 def execute(id):
@@ -29,6 +29,11 @@ def execute(id):
 def main():
     while True:
         (ARTIFACT_DIR/'heartbeat').write_text(str(time.time()))
-        value=queue.blpop('analysis:queue',timeout=2)
-        if value:execute(int(value[1]))
+        # 双队列：常规密度分析优先，其次逐站剔除试算；均为短超时轮询，互不阻塞
+        value=queue.blpop(ANALYSIS_QUEUE,timeout=2)
+        if value:
+            execute(int(value[1]));continue
+        value=queue.blpop(LOO_QUEUE,timeout=2)
+        if value:
+            execute_job(int(value[1]),Session)
 if __name__=='__main__':main()

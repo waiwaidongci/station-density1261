@@ -34,6 +34,8 @@ services:
       JWT_SECRET: ${JWT_SECRET:-station-density-demo-secret-change-before-deployment}
       SEED_DEMO: ${SEED_DEMO:-true}
       ARTIFACT_DIR: /artifacts
+      LOO_MEMORY_LIMIT: ${LOO_MEMORY_LIMIT:-134217728}
+      LOO_BATCH_SIZE: ${LOO_BATCH_SIZE:-256}
       OPENBLAS_NUM_THREADS: 1
       OMP_NUM_THREADS: 1
     ports: ["${BACKEND_PORT:-19246}:8000"]
